@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="no">
+<head>
+    <meta charset="utf-8" />
+    <title>Sparkesykkel – skissemodell</title>
+    <style>
+        /* Fullskjerm, mørk bakgrunn og fjern scroll */
+        html, body { margin:0; height:100%; background:#222; overflow:hidden; }
+
+        /* Info-boks */
+        #info {
+            position:absolute;
+            top:10px;
+            left:10px;
+            color:#ddd;
+            background:rgba(0,0,0,0.4);
+            padding:8px;
+            border-radius:6px;
+            font:14px sans-serif;
+        }
+    </style>
+</head>
+<body>
+<div id="info">
+    ←/→: sving styret<br>
+    F/G: spinn hjul<br>
+    AWSD: kamera<br>
+    V/B: zoom
+</div>
+
+<!-- Biblioteker -->
+<script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+<script src="https://unpkg.com/stats.js@0.17.0/build/stats.min.js"></script>
+
+<script>
+    /* ====================== Scene og Kamera ====================== */
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x333333);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    let camTheta = Math.PI/4, camPhi = Math.PI/6, camR = 15;
+
+    // Oppdaterer kameraets posisjon basert på sfæriske koordinater
+    function updateCam(){
+        const x = camR * Math.cos(camPhi) * Math.sin(camTheta);
+        const y = camR * Math.sin(camPhi);
+        const z = camR * Math.cos(camPhi) * Math.cos(camTheta);
+        camera.position.set(x, y, z);
+        camera.lookAt(0,1,0);
+    }
+    updateCam();
+
+    /* ====================== Renderer ====================== */
+    const renderer = new THREE.WebGLRenderer({antialias:true});
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    /* ====================== Lys ====================== */
+    scene.add(new THREE.AmbientLight(0x555555));
+
+    const pointLight = new THREE.PointLight(0xffffff, 0.8);
+    pointLight.position.set(5,6,5);
+    scene.add(pointLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    dirLight.position.set(5, 10, 2);
+    scene.add(dirLight);
+
+    /* ====================== Bakke og Rutenett ====================== */
+    const planeSize = 20;
+    const planeMat = new THREE.MeshStandardMaterial({
+        color: 0x446644,
+        metalness: 0.2,
+        roughness: 0.8,
+        side: THREE.DoubleSide
+    });
+    const groundPlane = new THREE.Mesh(new THREE.PlaneGeometry(planeSize, planeSize), planeMat);
+    groundPlane.rotation.x = Math.PI / 2;
+    scene.add(groundPlane);
+
+    const gridHelper = new THREE.GridHelper(planeSize, 20, 0x444444, 0x222222);
+    gridHelper.position.y = 0.01; // unngå z-fighting
+    scene.add(gridHelper);
+
+    /* ====================== Teksturer ====================== */
+    const loader = new THREE.TextureLoader();
+    const wheelTex = loader.load("wheelTexture-1-2.png");
+    const metalTex = loader.load("metal1.png");
+
+    // TODO glippe mellom dekk tekstur og felg
+
+    // Dekkmateriale
+    const tireTex = wheelTex.clone();
+    tireTex.wrapS = THREE.RepeatWrapping;
+    tireTex.wrapT = THREE.RepeatWrapping;
+    tireTex.repeat.set(6,1);
+
+    const tireMat = new THREE.MeshStandardMaterial({ map: tireTex, metalness:0.2, roughness:0.9 });
+
+    // TODO felg tekstur er offset
+
+    // Felgmateriale
+    const rimTex = wheelTex.clone();
+    rimTex.repeat.set(0.5,0.5);
+    const rimMat = new THREE.MeshStandardMaterial({ map: rimTex, metalness:0.7, roughness:0.4 });
+
+    // Metallmateriale
+    const metalCrop = metalTex.clone();
+    metalCrop.wrapS = THREE.RepeatWrapping;
+    metalCrop.wrapT = THREE.RepeatWrapping;
+    metalCrop.repeat.set(1,0.5);
+    metalCrop.offset.set(0,0.25);
+
+    const metalMat = new THREE.MeshStandardMaterial({ map: metalCrop, metalness:0.8, roughness:0.3 });
+
+    // Svart gummi (håndtak)
+    const black = new THREE.MeshStandardMaterial({ color:0x111111, metalness:0.1, roughness:0.9 });
+
+    /* ====================== Funksjon for hjul ====================== */
+    const wheelR = 0.35;
+    function makeWheel(){
+        const group = new THREE.Group();
+
+        // Dekk
+        const tireGeo = new THREE.CylinderGeometry(wheelR, wheelR, 0.05, 64, 1, true);
+        for (let i = 0; i < tireGeo.attributes.uv.count; i++) {
+            const u = tireGeo.attributes.uv.getX(i);
+            const v = tireGeo.attributes.uv.getY(i);
+            tireGeo.attributes.uv.setXY(i, v, u);
+        }
+        const tire = new THREE.Mesh(tireGeo, tireMat);
+        tire.rotation.x = Math.PI/2;
+        group.add(tire);
+
+        // Felger foran og bak
+        const rimGeo = new THREE.CircleGeometry(wheelR*0.95, 32);
+        const rim1 = new THREE.Mesh(rimGeo, rimMat); rim1.position.z = 0.025; group.add(rim1);
+        const rim2 = new THREE.Mesh(rimGeo, rimMat); rim2.position.z = -0.025; rim2.rotation.y = Math.PI; group.add(rim2);
+
+        return group;
+    }
+
+    /* ====================== Sparkesykkel ====================== */
+    const scooter = new THREE.Group();
+    scooter.position.y = wheelR;
+    scene.add(scooter);
+
+    // Deck
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(2.9,0.1,0.5), metalMat);
+    deck.position.set(0.25,0,0);
+    scooter.add(deck);
+
+    // Bakre støtte og skjerm
+    const support = new THREE.Mesh(new THREE.BoxGeometry(0.15,0.7,0.15), metalMat);
+    support.position.set(1.5,0.35,0); support.rotation.z = -Math.PI/6;
+    scooter.add(support);
+
+    const fender = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.1,0.2), metalMat);
+    fender.position.set(1.9,0.7,0);
+    scooter.add(fender);
+
+    // Bak-hjul
+    const rearWheel = makeWheel();
+    rearWheel.position.set(1.7,0,0);
+    scooter.add(rearWheel);
+
+    // Front assembly
+    const frontAssembly = new THREE.Group();
+    frontAssembly.position.set(-1.6,0,0);
+    scooter.add(frontAssembly);
+
+    // Stamme og krone
+    const stemLength = 2.0;
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,stemLength,16).translate(0,stemLength/2,0), metalMat);
+    stem.rotation.z = -Math.PI/7; frontAssembly.add(stem);
+
+    const crownLength = stemLength/4;
+    const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,crownLength,16).translate(0,crownLength/2,0), metalMat);
+    crown.rotation.z = -Math.PI/7; frontAssembly.add(crown);
+
+    // Skrå avstiver
+    setTimeout(() => {
+        const crownTopWorld = new THREE.Vector3();
+        crown.localToWorld(crownTopWorld.set(0,crownLength,0));
+
+        const deckFrontWorld = new THREE.Vector3();
+        scooter.localToWorld(deckFrontWorld.set(-1.2,0.05,0));
+
+        const strutVec = new THREE.Vector3().subVectors(deckFrontWorld,crownTopWorld);
+        const strutMid = new THREE.Vector3().addVectors(crownTopWorld,deckFrontWorld).multiplyScalar(0.5);
+        const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,strutVec.length(),12), metalMat);
+        strut.position.copy(strutMid);
+
+        const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), strutVec.clone().normalize());
+        strut.setRotationFromQuaternion(quat);
+
+        scene.add(strut);
+    }, 100);
+
+    // Front-hjul
+    const frontWheel = makeWheel();
+    frontAssembly.add(frontWheel);
+    frontWheel.position.set(0,0,0);
+
+    // Styre
+    const handlebarGroup = new THREE.Group();
+    stem.add(handlebarGroup);
+    handlebarGroup.position.set(0, stemLength, 0);
+    handlebarGroup.rotation.y = Math.PI/2;
+
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2,0.06,0.06), metalMat);
+    handlebarGroup.add(bar);
+
+    const gripL = new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.05,0.25,12), black);
+    gripL.rotation.z = Math.PI/2; gripL.position.set(-0.6,0,0); handlebarGroup.add(gripL);
+
+    const gripR = gripL.clone(); gripR.position.set(0.6,0,0); handlebarGroup.add(gripR);
+
+    /* ====================== Kontrollere ====================== */
+    let steer=0, maxSteer=Math.PI/4;
+    let wheelSpin=0, spinVel=0;
+    const keys={};
+
+    window.addEventListener('keydown', e => {
+        keys[e.key.toLowerCase()] = true;
+        if(e.key==="ArrowLeft") steer=Math.max(steer-0.1,-maxSteer);
+        if(e.key==="ArrowRight") steer=Math.min(steer+0.1,maxSteer);
+    });
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()]=false);
+
+    // Kamera kontroller
+    window.addEventListener('keydown', e => {
+        const k=e.key.toLowerCase();
+        if(k==='a'){camTheta-=0.1; updateCam();}
+        if(k==='d'){camTheta+=0.1; updateCam();}
+        if(k==='w'){camPhi=Math.min(camPhi+0.1, Math.PI/2-0.1); updateCam();}
+        if(k==='s'){camPhi=Math.max(camPhi-0.1, -Math.PI/3); updateCam();}
+        if(k==='v'){camR=Math.max(5, camR-0.5); updateCam();}
+        if(k==='b'){camR=Math.min(40, camR+0.5); updateCam();}
+    });
+
+    /* ====================== Stats ====================== */
+    const stats = new Stats();
+    stats.dom.style.position='absolute';
+    stats.dom.style.left='auto';
+    stats.dom.style.right='10px';
+    stats.dom.style.top='10px';
+    document.body.appendChild(stats.dom);
+
+    /* ====================== Animasjon ====================== */
+    function animate(){
+        stats.begin();
+
+        // TODO styret svinger fra et punkt i forhjul, ikke crown
+
+        // Sving styre
+        frontAssembly.rotation.y = steer;
+
+        // Hjulspinn
+        if(keys['f']) spinVel=-6;
+        else if(keys['g']) spinVel=6;
+        else spinVel*=0.9;
+        wheelSpin += spinVel * 0.016;
+        frontWheel.rotation.z = wheelSpin;
+        rearWheel.rotation.z = wheelSpin;
+
+        renderer.render(scene, camera);
+        stats.end();
+        requestAnimationFrame(animate);
+    }
+    animate();
+</script>
+</body>
+</html>
